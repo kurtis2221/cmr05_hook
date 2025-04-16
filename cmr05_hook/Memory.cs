@@ -7,19 +7,35 @@ namespace MemoryEdit
 {
     class Memory
     {
-        [DllImport("kernel32.dll")]
-        static extern IntPtr OpenProcess(UInt32 dwDesiredAccess, Boolean bInheritHandle,
-        UInt32 dwProcessId);
-        [DllImport("kernel32.dll")]
-        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
-        byte[] lpBuffer, UIntPtr nSize, uint lpNumberOfBytesWritten);
-        [DllImport("kernel32.dll")]
-        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
-        byte[] lpBuffer, UIntPtr nSize, uint lpNumberOfBytesWritten);
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MEMORY_BASIC_INFORMATION
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public IntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
 
-        [DllImport("kernel32.dll")]
-        static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress,
-        UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
+        [Flags]
+        public enum ProcessAccessFlags : uint
+        {
+            All = 0x001F0FFF,
+            Terminate = 0x00000001,
+            CreateThread = 0x00000002,
+            VirtualMemoryOperation = 0x00000008,
+            VirtualMemoryRead = 0x00000010,
+            VirtualMemoryWrite = 0x00000020,
+            DuplicateHandle = 0x00000040,
+            CreateProcess = 0x000000080,
+            SetQuota = 0x00000100,
+            SetInformation = 0x00000200,
+            QueryInformation = 0x00000400,
+            QueryLimitedInformation = 0x00001000,
+            Synchronize = 0x00100000
+        }
 
         public enum Protection : uint
         {
@@ -36,204 +52,189 @@ namespace MemoryEdit
             PAGE_WRITECOMBINE = 0x400
         }
 
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcess(ProcessAccessFlags dwDesiredAccess, bool bInheritHandle,
+            uint dwProcessId);
+
+        [DllImport("kernel32.dll")]
+        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
+            byte[] lpBuffer, UIntPtr nSize, uint lpNumberOfBytesWritten);
+        [DllImport("kernel32.dll")]
+        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
+            byte[] lpBuffer, UIntPtr nSize, uint lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll")]
+        static extern int VirtualQueryEx(IntPtr hProcess, IntPtr lpAddress,
+            out MEMORY_BASIC_INFORMATION lpBuffer, uint dwLength); 
+        [DllImport("kernel32.dll")]
+        static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress,
+            uint dwSize, Protection flNewProtect, out uint lpflOldProtect);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr CreateRemoteThread(IntPtr hProcess,
+           IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress,
+           IntPtr lpParameter, uint dwCreationFlags, out uint lpThreadId);
+        [DllImport("kernel32.dll")]
+        static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress,
+           uint dwSize, uint flAllocationType, uint flProtect);
+
+        /*public enum AllocationType : uint
+        {
+            Commit = 0x1000,
+            Reserve = 0x2000,
+            Decommit = 0x4000,
+            Release = 0x8000,
+            Reset = 0x80000,
+            Physical = 0x400000,
+            TopDown = 0x100000,
+            WriteWatch = 0x200000,
+            LargePages = 0x20000000
+        }*/
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")]
+        static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
         //Create handle
         IntPtr Handle;
+        uint Pid;
 
-        public static bool IsProcessOpen(string name)
+        public bool IsFocused()
         {
-            foreach (Process clsProcess in Process.GetProcesses())
-            {
-                if (clsProcess.ProcessName == name)
-                {
-                    return true;
-                }
-            }
-            return false;
+            uint id;
+            GetWindowThreadProcessId(GetForegroundWindow(), out id);
+            return Pid == id;
         }
 
-        //constructor
-        public Memory(string sprocess, uint access)
+        public bool Attach(string sprocess, ProcessAccessFlags access)
         {
             //Get the specific process
             Process[] Processes = Process.GetProcessesByName(sprocess);
+            if (Processes.Length < 1) return false;
             Process nProcess = Processes[0];
-            //access to the process
-            //0x10 - read
-            //0x20 - write
-            //0x001F0FFF - all
-            Handle = OpenProcess(access, false, (uint)nProcess.Id);
+            Attach((uint)nProcess.Id, access);
+            return true;
+        }
+
+        public bool Attach(uint pid, ProcessAccessFlags access)
+        {
+            Pid = pid;
+            Handle = OpenProcess(access, false, Pid);
+            return true;
+        }
+
+        public void Detach()
+        {
+            if (Handle != IntPtr.Zero)
+                CloseHandle(Handle);
         }
 
         //Memory reading
 
-        //Byte
-        public int ReadBytePointer(uint pointer, uint offset, int blen)
+        //Byte array
+        public byte[] ReadBytes(uint pointer, int blen)
         {
-            byte[] bytes = new byte[24];
-
-            //Creating the address (reading the Base and add the offset)
-            uint adress = (uint)Read(pointer) + offset;
-            //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)adress, bytes, (UIntPtr)blen, 0);
-            //Return the result as 4 byte int
-            return BitConverter.ToInt32(bytes, 0);
-
-        }
-
-        public int ReadByte(uint pointer, int blen)
-        {
-            byte[] bytes = new byte[24];
+            byte[] bytes = new byte[blen];
 
             //Reading the specific address within the process
             ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)blen, 0);
-            //Return the result as 4 byte int
-            return BitConverter.ToInt32(bytes, 0);
+            return bytes;
+        }
+
+        //Byte
+        public byte ReadByte(uint pointer)
+        {
+            byte[] bytes = new byte[1];
+
+            //Reading the specific address within the process
+            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)1, 0);
+            return bytes[0];
         }
 
         //Float
-        public float ReadFloatPointer(uint pointer, uint offset)
-        {
-            byte[] bytes = new byte[24];
-
-            //Creating the address (reading the Base and add the offset)
-            uint adress = (uint)Read(pointer) + offset;
-            //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)adress, bytes, (UIntPtr)sizeof(float), 0);
-            //Return the result as 4 byte int
-            return BitConverter.ToSingle(bytes, 0);
-
-        }
-
         public float ReadFloat(uint pointer)
         {
-            byte[] bytes = new byte[24];
+            byte[] bytes = new byte[4];
 
             //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)sizeof(float), 0);
-            //Return the result as 4 byte int
+            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)4, 0);
             return BitConverter.ToSingle(bytes, 0);
         }
 
         //Double
-        public double ReadDoublePointer(uint pointer, uint offset)
-        {
-            byte[] bytes = new byte[24];
-
-            //Creating the address (reading the Base and add the offset)
-            uint adress = (uint)Read(pointer) + offset;
-            //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)adress, bytes, (UIntPtr)sizeof(double), 0);
-            //Return the result as 4 byte int
-            return BitConverter.ToDouble(bytes, 0);
-
-        }
-
         public double ReadDouble(uint pointer)
         {
-            byte[] bytes = new byte[24];
+            byte[] bytes = new byte[8];
 
             //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)sizeof(double), 0);
-            //Return the result as 4 byte int
+            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)8, 0);
             return BitConverter.ToDouble(bytes, 0);
         }
 
         //String
-        public string ReadStringPointer(uint pointer, uint offset, int blen)
-        {
-            byte[] bytes = new byte[24];
-
-            //Creating the address (reading the Base and add the offset)
-            uint adress = (uint)Read(pointer) + offset;
-            //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)adress, bytes, (UIntPtr)blen, 0);
-            //Return the result as 4 byte int
-            return BitConverter.ToString(bytes, 0);
-
-        }
-
         public string ReadString(uint pointer, int blen)
         {
-            byte[] bytes = new byte[24];
+            byte[] bytes = new byte[blen];
 
             //Reading the specific address within the process
             ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)blen, 0);
-            //Return the result as 4 byte int
             return BitConverter.ToString(bytes, 0);
         }
 
-        //Used for pointers
-        public int Read(uint pointer)
+        //Int32
+        public uint Read(uint pointer)
         {
-            byte[] bytes = new byte[24];
+            byte[] bytes = new byte[4];
 
             //Reading the specific address within the process
-            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)sizeof(int), 0);
+            ReadProcessMemory(Handle, (IntPtr)pointer, bytes, (UIntPtr)4, 0);
             //Return the result as 4 byte int
-            return BitConverter.ToInt32(bytes, 0);
+            return BitConverter.ToUInt32(bytes, 0);
         }
 
         //Memory writing
 
-        //Byte
-        public void WriteBytePointer(uint pointer, uint offset, byte[] Buffer, int blen)
-        {
-            uint adress = (uint)Read(pointer) + offset;
-            WriteProcessMemory(Handle, (IntPtr)adress, Buffer, (UIntPtr)blen, 0);
-        }
-
-        public void WriteByte(uint pointer, byte[] Buffer, int blen)
+        public void WriteBytes(uint pointer, byte[] Buffer, int blen)
         {
             WriteProcessMemory(Handle, (IntPtr)pointer, Buffer, (UIntPtr)blen, 0);
         }
 
-        //Double
-        public void WriteDoublePointer(uint pointer, uint offset, byte[] Buffer, int blen)
+        //Memory protection
+
+        public MEMORY_BASIC_INFORMATION GetProtection(uint pointer, uint length)
         {
-            uint adress = (uint)Read(pointer) + offset;
-            WriteProcessMemory(Handle, (IntPtr)adress, Buffer, (UIntPtr)sizeof(double), 0);
+            MEMORY_BASIC_INFORMATION lpBuffer;
+            VirtualQueryEx(Handle, (IntPtr)pointer, out lpBuffer, length);
+            return lpBuffer;
         }
 
-        public void WriteDouble(uint pointer, byte[] Buffer, int blen)
+        public bool SetProtection(uint dwAddress, uint dwSize, Protection flNewProtect, out uint lpflOldProtect)
         {
-            WriteProcessMemory(Handle, (IntPtr)pointer, Buffer, (UIntPtr)sizeof(double), 0);
+            return !VirtualProtectEx(Handle, (IntPtr)dwAddress, dwSize, flNewProtect, out lpflOldProtect);
         }
 
-        //Float
-        public void WriteFloatPointer(uint pointer, uint offset, byte[] Buffer)
+        //Calling functions
+
+        public IntPtr ThreadCall(IntPtr address)
         {
-            uint adress = (uint)Read(pointer) + offset;
-            WriteProcessMemory(Handle, (IntPtr)adress, Buffer, (UIntPtr)sizeof(float), 0);
+            uint tid;
+            return CreateRemoteThread(Handle, IntPtr.Zero, 0, address, IntPtr.Zero, 0, out tid);
         }
 
-        public void WriteFloat(uint pointer, byte[] Buffer)
+        public void ThreadClose(IntPtr address)
         {
-            WriteProcessMemory(Handle, (IntPtr)pointer, Buffer, (UIntPtr)sizeof(float), 0);
+            CloseHandle(address);
         }
 
-        //String
-        public void WriteStringPointer(uint pointer, uint offset, byte[] Buffer, int blen)
-        {
-            uint adress = (uint)Read(pointer) + offset;
-            WriteProcessMemory(Handle, (IntPtr)adress, Buffer, (UIntPtr)blen, 0);
-        }
+        //Allocate memory
 
-        public void WriteString(uint pointer, byte[] Buffer, int blen)
+        public IntPtr Allocate(uint length)
         {
-            WriteProcessMemory(Handle, (IntPtr)pointer, Buffer, (UIntPtr)blen, 0);
-        }
-
-        bool WriteProtectedMemory(IntPtr hProcess, IntPtr dwAddress, UIntPtr dwSize, uint flNewProtect, uint lpflOldProtect)
-        {
-            if (!VirtualProtectEx(hProcess, dwAddress, dwSize, flNewProtect, out lpflOldProtect))
-                return true;
-
-            return false;
-        }
-
-        public bool SetProtection(uint dwAddress, int dwSize, Protection flNewProtect)
-        {
-            return WriteProtectedMemory(Handle, (IntPtr)dwAddress, (UIntPtr)dwSize, (uint)flNewProtect, 0);
+            return VirtualAllocEx(Handle, IntPtr.Zero, length, 0x1000, 0x40);
         }
     }
 }

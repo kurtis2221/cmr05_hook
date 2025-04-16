@@ -28,8 +28,10 @@
         /// </summary>
         private void InitializeComponent()
         {
+            this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Form1));
             this.label1 = new System.Windows.Forms.Label();
+            this.tmr_scan = new System.Windows.Forms.Timer(this.components);
             this.SuspendLayout();
             // 
             // label1
@@ -41,6 +43,12 @@
             this.label1.Size = new System.Drawing.Size(276, 25);
             this.label1.TabIndex = 0;
             this.label1.Text = "F12 - Disable Auto Reset";
+            // 
+            // tmr_scan
+            // 
+            this.tmr_scan.Enabled = true;
+            this.tmr_scan.Interval = 5000;
+            this.tmr_scan.Tick += new System.EventHandler(this.tmr_scan_Tick);
             // 
             // Form1
             // 
@@ -62,6 +70,7 @@
         #endregion
 
         private System.Windows.Forms.Label label1;
+        private System.Windows.Forms.Timer tmr_scan;
     }
 }
 
